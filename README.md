@@ -8,6 +8,8 @@ Hardware
 --------
 The hardware consists of an MPU6050 sensor connected to an ESP8266 MCU.  A bare ESP8266 mounted on an adapter plate was chosen for this project to keep current usage to a minimum.  When in deep sleep mode, the MCU draws <50 micro amps.  When running on an development board several milliamps are drawn even in deep sleep mode.
 
+![Sensor Picture] (http://github.com/johnhmacleod/vibe/doc/20170627_085214.jpg)
+
 MCU Software
 ------------
 A small C++ application is used to capture the data via I2C from the MPU6050.  Time domain acceleration data is read into an array.  FFT code is then used to translate into the frquency domain.  In addition to the frequency spectrum, maximum acceleration and temperature is also captured from the sensor.  A JSON package is constructed and sent via MQTT to the IBM IoT Platform using the PubSub library.
