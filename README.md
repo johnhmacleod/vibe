@@ -8,7 +8,7 @@ Hardware
 --------
 The hardware consists of an MPU6050 sensor connected to an ESP8266 MCU.  A bare ESP8266 mounted on an adapter plate was chosen for this project to keep current usage to a minimum.  When in deep sleep mode, the MCU draws <50 micro amps.  When running on an development board several milliamps are drawn even in deep sleep mode.
 
-![SensorPicture] (doc/20170627_085214.jpg)
+![SensorPicture] (20170627_085214.jpg)
 
 MCU Software
 ------------
