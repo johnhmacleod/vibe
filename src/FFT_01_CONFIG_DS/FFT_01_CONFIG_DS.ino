@@ -1,34 +1,15 @@
-/*
 
-	Example of use of the FFT libray
-        Copyright (C) 2014 Enrique Condes
-
-	This program is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation, either version 3 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-*/
 #include <FS.h>                   //this needs to be first, or it all crashes and burns...
-
-#define MQTT_MAX_PACKET_SIZE 2048
 #include <ESP8266WiFi.h>
+// You need to edit PubSubClient.h
 #include <PubSubClient.h> 
+// PubSubClient.h must be edited to allow messages to 2048 bytes - look for MQTT_MAX_PACKET_SIZE
 #include "arduinoFFT.h"
 #include <Wire.h>
 #include "MPU6050.h"
 #include <ESP8266WebServer.h>
 #include <DNSServer.h>
 #include <WiFiManager.h>   
-
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 void gotoSleep(int flashCount);
 ADC_MODE(ADC_VCC);
@@ -69,14 +50,10 @@ void mqttConnect();
 
 const char publishTopic[] = "iot-2/evt/status/fmt/json";
 
-#define ORG "" 
-#define DEVICE_TYPE "" 
-#define DEVICE_ID ""
-#define TOKEN ""
 char org[10] = ORG;
-char deviceType[32] = DEVICE_TYPE;
-char deviceId[32] = DEVICE_ID;
-char token[50] = TOKEN;
+char deviceType[32];
+char deviceId[32];
+char token[50] = ;
 
 const char IBMserver[] = ".messaging.internetofthings.ibmcloud.com";
 char server[200];
@@ -85,7 +62,7 @@ char clientId[250]; // = "d:" ORG ":" DEVICE_TYPE ":" DEVICE_ID;
 void callback(char* topic, byte* payload, unsigned int payloadLength);
 
 WiFiClientSecure wifiClient;
-PubSubClient client(server, 443, callback, wifiClient);
+PubSubClient client(server, 8883, callback, wifiClient);
 
 
 MPU6050 accelgyro;
@@ -102,8 +79,8 @@ arduinoFFT FFT = arduinoFFT(); /* Create FFT object */
 
 // FFT Parameters
 const uint16_t samples = 128; //This value MUST ALWAYS be a power of 2
-const double signalFrequency = 100;
-const double samplingFrequency = 300;
+
+const double samplingFrequency = 1000;  // Max frequency to measure * 2.  Limit 1000 (500Hz)
 const double delayFactor = 1000000 / samplingFrequency;
 
 /*
@@ -112,12 +89,10 @@ Input vectors receive computed results from FFT
 */
 double vReal[samples];
 double vImag[samples];
-double meanArray(double *array, uint8_t size);
+double meanArray(double *array, int size);
 char MAC_char[48] = {0};
 
 void readSensorData() {
-  volts = ESP.getVcc() / 1000.0;  
-  accelgyro.getAcceleration(&ax, &ay, &az);
 }
 
 #define SCL_INDEX 0x00
@@ -140,12 +115,14 @@ void readSpiffs(), writeSpiffs(), localParams(), initGyro();
 WiFiManager wifiManager;
 
 void setup() { 
+  system_update_cpu_freq(160); // Need fast CPU to run 500Hz detection
   pinMode(TRIGGER_PIN, INPUT_PULLUP); // Ground this pin to force config portal
   int trigger = digitalRead(TRIGGER_PIN);
   pinMode(D4, OUTPUT);  // We flash this on successful publish
   digitalWrite(D4, LOW);
   Serial.begin(115200);
   delay(100);
+//  Serial.setDebugOutput(true);
   readSpiffs();
   
   pinMode(D8, OUTPUT);
@@ -179,8 +156,9 @@ void setup() {
   wifiManager.addParameter(&custom_token);
   wifiManager.addParameter(&custom_per_hour);
 
-  //reset settings - for testing
+  //reset settings - must uncomment the folloing line (and see SPIFFS.ino) the first time you use a new ESP8266
   //wifiManager.resetSettings(); // ***********************************************************
+	
   uint8_t MAC_array[6];
   // WiFi.persistent(false);
   WiFi.macAddress(MAC_array);
@@ -236,30 +214,59 @@ void setup() {
   localParams();
 
   Wire.begin(D1, D2); // CLK on D2, Data on D1
+  Wire.setClock(400000);
+
   initGyro();
 }
 
 void loop() {
-//  if (digitalRead(D5) == 0)
-//    digitalWrite(D4, LOW);
-//  else
-//    digitalWrite(D4, HIGH);
- if (!client.loop()) { // Invoke the MQTT client loop to check for published messages
+  Serial.println("Loop");
+ if (!client.connected()) { // Invoke the MQTT client loop to check for published messages
+   Serial.println("State: " +String(client.state()));
    mqttConnect();
  } 
-
+ Serial.println("Connect OK");
  // Collect raw accel data
   memset((void *)vImag, 0, sizeof(vImag)); // Clear the array
-  long n1 = micros();
-  for (uint8_t i = 0; i < samples; i++)
-  {
-    readSensorData();
-    vReal[i] = ax;
-    long n2 = micros();
-    long d = n2 - n1;
-    n1 += delayFactor;
-    delayMicroseconds(delayFactor - d);
+  long n1;
+  long d;
+  long d1, d2;
+  long maxga;
+  long maxd;
+  int retries = 20;
+  bool overrun = true;
+  while (overrun && retries > 0) {
+    n1 = micros();
+    maxga = 0;
+    maxd = 0;
+    overrun = false;
+    for (int i = 0; i < samples; i++) {
+      d1 = micros();
+      accelgyro.getAcceleration(&ax, &ay, &az);
+      d2 = micros();
+      d = d2 - d1;
+      maxga = d > maxd ? d : maxga;    
+  //    yield();
+      vReal[i] = ax;
+      long n2 = micros();
+      d = n2 - n1; // Time it took to do the reading
+      maxd = d > maxd ? d : maxd;
+      n1 += delayFactor; // Time next reading is to be taken
+      if (delayFactor < d) {
+        Serial.println("Overrun! delayFactor:" + String(delayFactor) + " d: " + String(d) + " retries: " + String(retries));
+        overrun = true;
+        break;
+      }
+      else
+        delayMicroseconds(delayFactor - d); // Delay time is reduced by the amount it took to do the reading
+    }
+  retries--;
   }
+  
+  Serial.println("delayFactor: " + String(delayFactor) + " maxd: " + String(maxd) + " maxga: " + String(maxga));
+
+  // Collect Volts
+  volts = ESP.getVcc() / 1000.0;  
 
   // Collect Temperature
   int16_t temp = accelgyro.getTemperature();
@@ -314,8 +321,11 @@ void loop() {
   
   payload += "\"Volts\":" + String(int(100*volts) / 100.0) +" }}";  
   
-  Serial.print("Sending payload: "); Serial.println(payload);
-  if (client.publish(publishTopic, (char*) payload.c_str())) {
+  Serial.println(payload);
+  
+ 
+  if (client.publish(publishTopic, (char*) payload.c_str())) {  
+      
        Serial.println("Publish OK");
        digitalWrite(D4, LOW);
        delay(50);
@@ -331,12 +341,12 @@ void loop() {
        Serial.println("Publish FAILED");
      }
   lastPublishMillis = millis();
-
   gotoSleep(0);
   }
+  
 
 // Used to remove DC component
-double meanArray(double *array, uint8_t size)
+double meanArray(double *array, int size)
 {
   double sum = 0.0;
   for(int i=0; i < size; i++)
@@ -371,5 +381,4 @@ void gotoSleep(int flashCount) { // Never returns!
   } else 
     delay(3000);
 }
-
 
