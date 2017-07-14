@@ -1,6 +1,8 @@
 
   void readSpiffs() {
-  //clean FS, for testing
+    
+  // reset clean FS -- you must uncomment the following line & run to "Done" the first time you use an ESP8266 - also see mainline code
+  // recomment for production
   // Serial.println("Formatting SPIFFS"); SPIFFS.format(); Serial.println("Done");//**********************************************
 
   //read configuration from FS json
